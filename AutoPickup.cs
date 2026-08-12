@@ -1,9 +1,9 @@
 // AutoPickup.cs
 // 作者：35117+Deepseek-v4-flash-0731
-// 版本 v26.8.12.1
+// 版本 v26.8.12.2
 // 功能：Unturned 自动拾取插件。玩家靠近掉落的物品时自动拾取，
 //       支持黑白名单、拾取范围、拾取速度、最低耐久条件。
-//       v26.8.12.2 新增：Alt+F 拾取时快捷加入白名单、背包 Alt+点击快捷加入黑名单、
+//       v26.8.12.2 新增：Alt+F 拾取时快捷加入白名单、右键物品界面右上角黑名单按钮、
 //       拾取成功提示（物品名 + ID，可配置提示位置，参考自动合成插件）。
 // 兼容：BepInEx 5，Unturned 3.26.3.8（U3-SDK）
 // 编译：运行 build.bat，输出 BepInEx/Plugins/AutoPickupMod.dll
@@ -19,7 +19,7 @@ using UnityEngine;
 
 namespace AutoPickup
 {
-    [BepInPlugin("com.trae.autopickup", "AutoPickup 自动拾取", "26.8.12.1")]
+    [BepInPlugin("com.trae.autopickup", "AutoPickup 自动拾取", "26.8.12.2")]
     public class AutoPickupPlugin : BaseUnityPlugin
     {
         // 供 Harmony 补丁访问插件实例与日志
@@ -51,7 +51,7 @@ namespace AutoPickup
         private ConfigEntry<string> cfgWhitelist;
         private ConfigEntry<byte> cfgMinDurability;
         private ConfigEntry<bool> cfgAltFWhitelist;
-        private ConfigEntry<bool> cfgAltClickBlacklist;
+        private ConfigEntry<bool> cfgBlacklistButton;
         private ConfigEntry<string> cfgNotifyTarget;
 
         private readonly HashSet<ushort> blacklistIds = new HashSet<ushort>();
@@ -101,9 +101,8 @@ namespace AutoPickup
                 cfgAltFWhitelist = Config.Bind("Shortcuts", "AltFAddWhitelist", true,
                     "拾取时按住 Alt 并按交互键（默认 F）：将准星指向的物品加入/移出白名单（再按一次移出）");
 
-                cfgAltClickBlacklist = Config.Bind("Shortcuts", "AltClickAddBlacklist", true,
-                    "背包中按住 Alt 单击物品：将该物品加入/移出黑名单（再点一次移出）。原版背包无悬停物品 API，" +
-                    "故参考自动合成插件采用 Alt+点击 方案（背包界面中 Alt+F 无效）");
+                cfgBlacklistButton = Config.Bind("Shortcuts", "BlacklistButton", true,
+                    "右键物品界面（介绍/使用菜单）右上角显示 X 按钮：点击将该物品加入/移出自动拾取黑名单（再点一次移出）");
 
                 // ---- 拾取提示（v26.8.12.2 新增，参考自动合成插件）----
                 cfgNotifyTarget = Config.Bind("Pickup", "NotifyTarget", "Off",
@@ -121,7 +120,7 @@ namespace AutoPickup
                 Player.onPlayerCreated += OnPlayerCreated;
                 Player.onPlayerDestroyed += OnPlayerDestroyed;
 
-                Logger.LogInfo("[AutoPickup] 插件启动完成，作者 35117+Deepseek-v4-flash-0731，版本 26.8.12.1");
+                Logger.LogInfo("[AutoPickup] 插件启动完成，作者 35117+Deepseek-v4-flash-0731，版本 26.8.12.2");
             }
             catch (Exception e)
             {
@@ -216,7 +215,7 @@ namespace AutoPickup
             }
 
             // Alt + 交互键（默认 F）：将准星指向的掉物加入/移出白名单。
-            // 非 UI 模式（showCursor == false）才执行；背包界面中请用 Alt+点击。
+            // 非 UI 模式（showCursor == false）才执行。
             if (cfgAltFWhitelist.Value && !PlayerUI.window.showCursor && IsAltHeld() && Input.GetKeyDown(ControlsSettings.interact))
             {
                 TryToggleWhitelistFromRay();
@@ -367,7 +366,7 @@ namespace AutoPickup
             }
         }
 
-        // Alt+点击：切换黑名单（Harmony 补丁调用）
+        // 右键菜单 X 按钮：切换黑名单（Harmony 补丁调用）
         internal void ToggleBlacklist(ushort itemId)
         {
             if (cfgBlacklist == null)
@@ -452,9 +451,9 @@ namespace AutoPickup
             return Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
         }
 
-        internal bool IsAltClickBlacklistEnabled()
+        internal bool IsBlacklistButtonEnabled()
         {
-            return cfgAltClickBlacklist != null && cfgAltClickBlacklist.Value;
+            return cfgBlacklistButton != null && cfgBlacklistButton.Value;
         }
 
         internal static void LogErrorStatic(string message)
@@ -501,48 +500,79 @@ namespace AutoPickup
         }
     }
 
-    // Alt+左键点击背包物品：切换黑名单标记（跳过原拖拽行为）。
-    // 原版背包 UI 无悬停物品公开 API，采用与自动合成插件一致的 Alt+点击方案。
-    [HarmonyPatch(typeof(PlayerDashboardInventoryUI), "onGrabbedItem")]
-    internal static class PatchItemAltClick
+    // 右键物品界面（介绍/使用菜单）右上角添加黑名单按钮（v26.8.12.2 新增，替代 Alt+点击方案）。
+    // 菜单打开时注入一个 30x30 的 X 按钮到物品图标区右上角，悬停提示「加入自动拾取黑名单」，
+    // 点击将当前选中物品加入/移出自动拾取黑名单。
+    [HarmonyPatch(typeof(PlayerDashboardInventoryUI), "openSelection")]
+    internal static class PatchOpenSelectionBlacklist
     {
-        internal static bool Prefix(object item)
+        private static ISleekButton blacklistButton;
+        private static ISleekBox selectionIconBox;
+
+        internal static void Postfix()
         {
-            if (!IsAltHeld())
+            AutoPickupPlugin instance = AutoPickupPlugin.Instance;
+            if (instance == null || !instance.IsBlacklistButtonEnabled())
             {
-                return true;
+                return;
             }
 
+            try
+            {
+                if (blacklistButton == null)
+                {
+                    selectionIconBox = GetSelectionIconBox();
+                    if (selectionIconBox == null)
+                    {
+                        return;
+                    }
+
+                    blacklistButton = Glazier.Get().CreateButton();
+                    blacklistButton.PositionOffset_X = 475;
+                    blacklistButton.PositionOffset_Y = 5;
+                    blacklistButton.SizeOffset_X = 30;
+                    blacklistButton.SizeOffset_Y = 30;
+                    blacklistButton.Text = "X";
+                    blacklistButton.TooltipText = "加入自动拾取黑名单";
+                    blacklistButton.OnClicked += OnClickedBlacklistButton;
+                    selectionIconBox.AddChild(blacklistButton);
+                }
+
+                blacklistButton.IsVisible = true;
+            }
+            catch (Exception exception)
+            {
+                AutoPickupPlugin.LogErrorStatic("[AutoPickup] 黑名单按钮注入异常：" + exception);
+            }
+        }
+
+        private static ISleekBox GetSelectionIconBox()
+        {
+            System.Reflection.FieldInfo field = typeof(PlayerDashboardInventoryUI).GetField("selectionIconBox",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            return field != null ? field.GetValue(null) as ISleekBox : null;
+        }
+
+        private static void OnClickedBlacklistButton(ISleekElement button)
+        {
             try
             {
                 AutoPickupPlugin instance = AutoPickupPlugin.Instance;
                 if (instance == null)
                 {
-                    return true;
+                    return;
                 }
 
-                if (!instance.IsAltClickBlacklistEnabled())
+                ItemJar jar = PlayerDashboardInventoryUI.selectedJar;
+                if (jar != null && jar.item != null)
                 {
-                    return true;
-                }
-
-                SleekItem sleekItem = item as SleekItem;
-                if (sleekItem != null && sleekItem.jar != null && sleekItem.jar.item != null)
-                {
-                    instance.ToggleBlacklist(sleekItem.jar.item.id);
+                    instance.ToggleBlacklist(jar.item.id);
                 }
             }
             catch (Exception exception)
             {
-                AutoPickupPlugin.LogErrorStatic("[AutoPickup] Alt点击标记黑名单异常：" + exception);
+                AutoPickupPlugin.LogErrorStatic("[AutoPickup] 黑名单按钮点击异常：" + exception);
             }
-
-            return false;
-        }
-
-        private static bool IsAltHeld()
-        {
-            return Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
         }
     }
 }
