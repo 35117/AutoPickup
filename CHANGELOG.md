@@ -1,5 +1,15 @@
 # 更新日志
 
+## v26.8.12.4（2026-08-12）
+
+### 新增
+- 隔墙拾取开关 PickupThroughWalls（Pickup 节，默认 false）：关闭时被墙/结构/大型物体遮挡的掉物不会自动拾取（视线检测，用原版 BLOCK_PICKUP 掩码）；开启则无视遮挡
+- 弹夹最低子弹数条件 MinMagazineAmmo（Pickup 节，默认 0=不限制）：弹夹类物品子弹数（item.amount）低于此值不拾取
+
+### 说明
+- 作者：35117+Deepseek-v4-flash-0731
+- 兼容 BepInEx 5，Unturned 3.26.3.8（U3-SDK）
+
 ## v26.8.12.3（2026-08-12）
 
 ### 新增
