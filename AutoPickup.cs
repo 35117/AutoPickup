@@ -1,8 +1,9 @@
 // AutoPickup.cs
 // 作者：35117+Deepseek-v4-flash-0731
-// 版本 v26.8.12.3
+// 版本 v26.8.12.4
 // 功能：Unturned 自动拾取插件。玩家靠近掉落的物品时自动拾取，
 //       支持黑白名单、拾取范围、拾取速度、最低耐久条件。
+//       v26.8.12.4 新增：隔墙拾取开关（默认关闭=需视线可达）、弹夹最低子弹数条件。
 //       v26.8.12.3 新增：扔出物品后冷却期内不自动拾取该物品（可配置时长）。
 //       v26.8.12.2 新增：Alt+F 拾取时快捷加入白名单、右键物品界面右上角黑名单按钮、
 //       拾取成功提示（物品名 + ID，可配置提示位置，参考自动合成插件）。
@@ -20,7 +21,7 @@ using UnityEngine;
 
 namespace AutoPickup
 {
-    [BepInPlugin("com.trae.autopickup", "AutoPickup 自动拾取", "26.8.12.3")]
+    [BepInPlugin("com.trae.autopickup", "AutoPickup 自动拾取", "26.8.12.4")]
     public class AutoPickupPlugin : BaseUnityPlugin
     {
         // 供 Harmony 补丁访问插件实例与日志
@@ -55,6 +56,8 @@ namespace AutoPickup
         private ConfigEntry<bool> cfgBlacklistButton;
         private ConfigEntry<string> cfgNotifyTarget;
         private ConfigEntry<float> cfgDropCooldown;
+        private ConfigEntry<bool> cfgPickupThroughWalls;
+        private ConfigEntry<byte> cfgMinMagazineAmmo;
 
         private readonly HashSet<ushort> blacklistIds = new HashSet<ushort>();
         private readonly HashSet<ushort> whitelistIds = new HashSet<ushort>();
@@ -121,6 +124,14 @@ namespace AutoPickup
                     new ConfigDescription("扔出物品后多少秒内不自动拾取该物品（防止刚扔的立刻捡回），0=关闭",
                         new AcceptableValueRange<float>(0f, 60f)));
 
+                // ---- 隔墙拾取与弹夹条件（v26.8.12.4 新增）----
+                cfgPickupThroughWalls = Config.Bind("Pickup", "PickupThroughWalls", false,
+                    "隔墙拾取：开启=无视遮挡按范围拾取；关闭=被墙/结构/大型物体遮挡的掉物不会自动拾取（需视线可达）");
+
+                cfgMinMagazineAmmo = Config.Bind("Pickup", "MinMagazineAmmo", (byte)0,
+                    new ConfigDescription("条件拾取：弹夹类物品子弹数低于此值不拾取（0-255，0 表示不限制）",
+                        new AcceptableValueRange<byte>(0, 255)));
+
                 ParseRules();
 
                 lastConfigWriteTime = File.GetLastWriteTimeUtc(Config.ConfigFilePath);
@@ -131,7 +142,7 @@ namespace AutoPickup
                 Player.onPlayerCreated += OnPlayerCreated;
                 Player.onPlayerDestroyed += OnPlayerDestroyed;
 
-                Logger.LogInfo("[AutoPickup] 插件启动完成，作者 35117+Deepseek-v4-flash-0731，版本 26.8.12.3");
+                Logger.LogInfo("[AutoPickup] 插件启动完成，作者 35117+Deepseek-v4-flash-0731，版本 26.8.12.4");
             }
             catch (Exception e)
             {
@@ -272,6 +283,12 @@ namespace AutoPickup
                     continue;
                 }
 
+                // 隔墙拾取关闭时：被墙/结构/大型物体遮挡的掉物不拾取（v26.8.12.4）
+                if (!cfgPickupThroughWalls.Value && IsBlockedByObstacle(player.transform.position, drop.transform.position))
+                {
+                    continue;
+                }
+
                 // 黑白名单检查
                 if (isWhitelistMode)
                 {
@@ -287,6 +304,12 @@ namespace AutoPickup
 
                 // 条件拾取：耐久（quality，0-100）低于配置值不拾取
                 if (cfgMinDurability.Value > 0 && drop.item.quality < cfgMinDurability.Value)
+                {
+                    continue;
+                }
+
+                // 条件拾取：弹夹子弹数低于配置值不拾取（v26.8.12.4）
+                if (cfgMinMagazineAmmo.Value > 0 && IsMagazineBelowMinAmmo(drop))
                 {
                     continue;
                 }
@@ -412,6 +435,39 @@ namespace AutoPickup
             }
 
             return false;
+        }
+
+        // 隔墙检测（v26.8.12.4）：玩家视线与掉物之间是否有墙体/结构/大型中型物体遮挡
+        private bool IsBlockedByObstacle(Vector3 playerPosition, Vector3 dropPosition)
+        {
+            try
+            {
+                Vector3 from = playerPosition + Vector3.up * 1.5f;
+                Vector3 to = dropPosition + Vector3.up * 0.3f;
+                return Physics.Linecast(from, to, RayMasks.BLOCK_PICKUP);
+            }
+            catch (Exception e)
+            {
+                Logger.LogError("[AutoPickup] 隔墙检测异常：" + e);
+                return false;
+            }
+        }
+
+        // 弹夹子弹数检查（v26.8.12.4）：弹夹物品的 item.amount 即当前子弹数
+        private bool IsMagazineBelowMinAmmo(InteractableItem drop)
+        {
+            if (drop.asset == null)
+            {
+                return false;
+            }
+
+            ItemMagazineAsset magazine = drop.asset as ItemMagazineAsset;
+            if (magazine == null)
+            {
+                return false;
+            }
+
+            return drop.item.amount < cfgMinMagazineAmmo.Value;
         }
 
         // 射线检测准星指向的掉物并切换白名单
