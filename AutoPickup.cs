@@ -1,8 +1,9 @@
 // AutoPickup.cs
 // 作者：35117+Deepseek-v4-flash-0731
-// 版本 v26.8.12.4
+// 版本 v26.8.12.5
 // 功能：Unturned 自动拾取插件。玩家靠近掉落的物品时自动拾取，
 //       支持黑白名单、拾取范围、拾取速度、最低耐久条件。
+//       v26.8.12.5 适配 PluginManager：循环切换标签改为内嵌选项格式（Unturned.Cycle:选项1|选项2）。
 //       v26.8.12.4 新增：隔墙拾取开关（默认关闭=需视线可达）、弹夹最低子弹数条件。
 //       v26.8.12.3 新增：扔出物品后冷却期内不自动拾取该物品（可配置时长）。
 //       v26.8.12.2 新增：Alt+F 拾取时快捷加入白名单、右键物品界面右上角黑名单按钮、
@@ -21,7 +22,7 @@ using UnityEngine;
 
 namespace AutoPickup
 {
-    [BepInPlugin("com.trae.autopickup", "AutoPickup 自动拾取", "26.8.12.4")]
+    [BepInPlugin("com.trae.autopickup", "AutoPickup 自动拾取", "26.8.12.5")]
     public class AutoPickupPlugin : BaseUnityPlugin
     {
         // 供 Harmony 补丁访问插件实例与日志
@@ -92,7 +93,7 @@ namespace AutoPickup
                 cfgListMode = Config.Bind("General", "ListMode", "Blacklist",
                     new ConfigDescription("名单模式：Blacklist=黑名单（名单内的物品不拾取）/ Whitelist=白名单（只拾取名单内的物品）",
                         new AcceptableValueList<string>("Blacklist", "Whitelist"),
-                        new object[] { "Unturned.Cycle" }));
+                        new object[] { "Unturned.Cycle:Blacklist|Whitelist" }));
 
                 cfgBlacklist = Config.Bind("Lists", "Blacklist", "",
                     new ConfigDescription("黑名单物品 ID 列表，多个用英文逗号分隔（例如 6666, 6667）",
@@ -117,7 +118,7 @@ namespace AutoPickup
                 cfgNotifyTarget = Config.Bind("Pickup", "NotifyTarget", "Off",
                     new ConfigDescription("拾取成功提示位置：Off=关闭，Popup=屏幕中下方提示栏，Chat=聊天栏",
                         new AcceptableValueList<string>("Off", "Popup", "Chat"),
-                        new object[] { "Unturned.Cycle" }));
+                        new object[] { "Unturned.Cycle:Off|Popup|Chat" }));
 
                 // ---- 丢弃冷却（v26.8.12.3 新增）----
                 cfgDropCooldown = Config.Bind("Pickup", "DropCooldownSeconds", 2f,
@@ -142,7 +143,7 @@ namespace AutoPickup
                 Player.onPlayerCreated += OnPlayerCreated;
                 Player.onPlayerDestroyed += OnPlayerDestroyed;
 
-                Logger.LogInfo("[AutoPickup] 插件启动完成，作者 35117+Deepseek-v4-flash-0731，版本 26.8.12.4");
+                Logger.LogInfo("[AutoPickup] 插件启动完成，作者 35117+Deepseek-v4-flash-0731，版本 26.8.12.5");
             }
             catch (Exception e)
             {
