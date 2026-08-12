@@ -1,8 +1,9 @@
 // AutoPickup.cs
 // 作者：35117+Deepseek-v4-flash-0731
-// 版本 v26.8.12.2
+// 版本 v26.8.12.3
 // 功能：Unturned 自动拾取插件。玩家靠近掉落的物品时自动拾取，
 //       支持黑白名单、拾取范围、拾取速度、最低耐久条件。
+//       v26.8.12.3 新增：扔出物品后冷却期内不自动拾取该物品（可配置时长）。
 //       v26.8.12.2 新增：Alt+F 拾取时快捷加入白名单、右键物品界面右上角黑名单按钮、
 //       拾取成功提示（物品名 + ID，可配置提示位置，参考自动合成插件）。
 // 兼容：BepInEx 5，Unturned 3.26.3.8（U3-SDK）
@@ -19,7 +20,7 @@ using UnityEngine;
 
 namespace AutoPickup
 {
-    [BepInPlugin("com.trae.autopickup", "AutoPickup 自动拾取", "26.8.12.2")]
+    [BepInPlugin("com.trae.autopickup", "AutoPickup 自动拾取", "26.8.12.3")]
     public class AutoPickupPlugin : BaseUnityPlugin
     {
         // 供 Harmony 补丁访问插件实例与日志
@@ -53,6 +54,7 @@ namespace AutoPickup
         private ConfigEntry<bool> cfgAltFWhitelist;
         private ConfigEntry<bool> cfgBlacklistButton;
         private ConfigEntry<string> cfgNotifyTarget;
+        private ConfigEntry<float> cfgDropCooldown;
 
         private readonly HashSet<ushort> blacklistIds = new HashSet<ushort>();
         private readonly HashSet<ushort> whitelistIds = new HashSet<ushort>();
@@ -64,6 +66,10 @@ namespace AutoPickup
 
         // 自动拾取发起后等待入包确认的物品（id -> 时间戳），用于拾取成功提示
         private readonly Dictionary<ushort, float> pendingNotifyItems = new Dictionary<ushort, float>();
+
+        // 玩家丢弃物品记录（v26.8.12.3）：冷却期内同位置同 ID 的掉物不自动拾取
+        private readonly List<ThrownDrop> thrownDrops = new List<ThrownDrop>();
+
         private Player subscribedPlayer;
 
         private void Awake()
@@ -110,6 +116,11 @@ namespace AutoPickup
                         new AcceptableValueList<string>("Off", "Popup", "Chat"),
                         new object[] { "Unturned.Cycle" }));
 
+                // ---- 丢弃冷却（v26.8.12.3 新增）----
+                cfgDropCooldown = Config.Bind("Pickup", "DropCooldownSeconds", 2f,
+                    new ConfigDescription("扔出物品后多少秒内不自动拾取该物品（防止刚扔的立刻捡回），0=关闭",
+                        new AcceptableValueRange<float>(0f, 60f)));
+
                 ParseRules();
 
                 lastConfigWriteTime = File.GetLastWriteTimeUtc(Config.ConfigFilePath);
@@ -120,7 +131,7 @@ namespace AutoPickup
                 Player.onPlayerCreated += OnPlayerCreated;
                 Player.onPlayerDestroyed += OnPlayerDestroyed;
 
-                Logger.LogInfo("[AutoPickup] 插件启动完成，作者 35117+Deepseek-v4-flash-0731，版本 26.8.12.2");
+                Logger.LogInfo("[AutoPickup] 插件启动完成，作者 35117+Deepseek-v4-flash-0731，版本 26.8.12.3");
             }
             catch (Exception e)
             {
@@ -159,6 +170,7 @@ namespace AutoPickup
             UnsubscribeInventory();
             subscribedPlayer = player;
             player.inventory.onInventoryAdded += OnItemAdded;
+            player.inventory.onInventoryRemoved += OnItemRemoved;
         }
 
         private void UnsubscribeInventory()
@@ -166,6 +178,7 @@ namespace AutoPickup
             if (subscribedPlayer != null)
             {
                 subscribedPlayer.inventory.onInventoryAdded -= OnItemAdded;
+                subscribedPlayer.inventory.onInventoryRemoved -= OnItemRemoved;
                 subscribedPlayer = null;
             }
         }
@@ -253,6 +266,12 @@ namespace AutoPickup
 
                 ushort itemId = drop.item.id;
 
+                // 刚扔出的物品冷却期内不拾取（v26.8.12.3）
+                if (IsRecentlyThrown(itemId, drop.transform.position))
+                {
+                    continue;
+                }
+
                 // 黑白名单检查
                 if (isWhitelistMode)
                 {
@@ -339,6 +358,60 @@ namespace AutoPickup
                     SendNotify("已自动拾取 ID " + jar.item.id + "（" + name + "）", Color.cyan);
                 }
             }
+        }
+
+        // 物品移除回调（v26.8.12.3）：记录移除位置与时间，用于丢弃冷却
+        private void OnItemRemoved(byte page, byte index, ItemJar jar)
+        {
+            if (jar == null || jar.item == null)
+            {
+                return;
+            }
+
+            // 只记录玩家背包页的移除（丢弃/装备替换/使用等），存储页忽略
+            if (page > PlayerInventory.PANTS)
+            {
+                return;
+            }
+
+            Player player = Player.LocalPlayer;
+            if (player == null)
+            {
+                return;
+            }
+
+            // 与原版丢弃位置一致：玩家前方 0.5 米
+            thrownDrops.Add(new ThrownDrop(jar.item.id,
+                player.transform.position + (player.transform.forward * 0.5f),
+                Time.realtimeSinceStartup));
+        }
+
+        // 判断该掉物是否处于刚扔出的冷却期（同 ID、同位置、未超时）；顺带清理过期记录
+        private bool IsRecentlyThrown(ushort itemId, Vector3 position)
+        {
+            float cooldown = cfgDropCooldown.Value;
+            if (cooldown <= 0f || thrownDrops.Count == 0)
+            {
+                return false;
+            }
+
+            float now = Time.realtimeSinceStartup;
+            for (int i = thrownDrops.Count - 1; i >= 0; i--)
+            {
+                ThrownDrop thrown = thrownDrops[i];
+                if (now - thrown.time > cooldown)
+                {
+                    thrownDrops.RemoveAt(i);
+                    continue;
+                }
+
+                if (thrown.itemId == itemId && (thrown.position - position).sqrMagnitude < 2.25f)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         // 射线检测准星指向的掉物并切换白名单
@@ -497,6 +570,21 @@ namespace AutoPickup
                     target.Add(id);
                 }
             }
+        }
+    }
+
+    // 丢弃记录（v26.8.12.3）：冷却期内同位置同 ID 的掉物不自动拾取
+    internal sealed class ThrownDrop
+    {
+        public ushort itemId;
+        public Vector3 position;
+        public float time;
+
+        public ThrownDrop(ushort id, Vector3 pos, float t)
+        {
+            itemId = id;
+            position = pos;
+            time = t;
         }
     }
 
