@@ -1,5 +1,15 @@
 # 更新日志
 
+## v26.8.12.5（2026-08-12）
+
+### 变更
+- 适配 PluginManager：ListMode、NotifyTarget 的循环切换标签改为内嵌选项格式（Unturned.Cycle:选项1|选项2），与最新插件模板一致
+- 全面核对 PluginManager 兼容性：物品列表（ItemList）、循环按钮（Cycle）、bool 开关、数值输入、配置热重载均正常
+
+### 说明
+- 作者：35117+Deepseek-v4-flash-0731
+- 兼容 BepInEx 5，Unturned 3.26.3.8（U3-SDK）
+
 ## v26.8.12.4（2026-08-12）
 
 ### 新增
